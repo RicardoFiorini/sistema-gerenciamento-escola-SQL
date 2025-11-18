@@ -1,141 +1,201 @@
--- Criação do banco de dados
-CREATE DATABASE SistemaGerenciamentoEscola;
+-- 1. Configuração
+CREATE DATABASE IF NOT EXISTS SistemaGerenciamentoEscola
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_0900_ai_ci;
+
 USE SistemaGerenciamentoEscola;
 
--- Tabela para armazenar informações de alunos
-CREATE TABLE Alunos (
-    aluno_id INT AUTO_INCREMENT PRIMARY KEY,
-    nome VARCHAR(100) NOT NULL,
-    data_nascimento DATE NOT NULL,
-    email VARCHAR(100) UNIQUE,
-    data_cadastro DATETIME DEFAULT CURRENT_TIMESTAMP
+-- 2. Entidades Base (Imutáveis)
+CREATE TABLE PeriodosLetivos (
+    periodo_id INT AUTO_INCREMENT PRIMARY KEY,
+    nome VARCHAR(20) NOT NULL UNIQUE, -- Ex: '2025-1', '2025-2'
+    data_inicio DATE NOT NULL,
+    data_fim DATE NOT NULL,
+    ativo BOOLEAN DEFAULT FALSE -- Apenas um período ativo por vez
 );
 
--- Tabela para armazenar informações de professores
-CREATE TABLE Professores (
-    professor_id INT AUTO_INCREMENT PRIMARY KEY,
-    nome VARCHAR(100) NOT NULL,
-    email VARCHAR(100) UNIQUE,
-    especialidade VARCHAR(100),
-    data_cadastro DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Tabela para armazenar informações de disciplinas
 CREATE TABLE Disciplinas (
     disciplina_id INT AUTO_INCREMENT PRIMARY KEY,
+    codigo_mec VARCHAR(20) UNIQUE,
     nome VARCHAR(100) NOT NULL,
-    carga_horaria INT NOT NULL,
-    professor_id INT,
-    FOREIGN KEY (professor_id) REFERENCES Professores(professor_id) ON DELETE SET NULL
+    ementa TEXT,
+    carga_horaria INT NOT NULL
 );
 
--- Tabela para armazenar notas dos alunos
+CREATE TABLE Pessoas (
+    pessoa_id INT AUTO_INCREMENT PRIMARY KEY,
+    tipo ENUM('Aluno', 'Professor', 'Admin') NOT NULL,
+    nome VARCHAR(100) NOT NULL,
+    email VARCHAR(100) NOT NULL UNIQUE,
+    cpf VARCHAR(14) UNIQUE,
+    data_nascimento DATE,
+    ativo BOOLEAN DEFAULT TRUE,
+    dados_extras JSON COMMENT 'Alergias, contatos de emergência, lattes',
+    criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_busca_pessoa (nome, email, tipo)
+);
+
+-- 3. Estrutura de Classes (Onde o ensino acontece)
+CREATE TABLE Turmas (
+    turma_id INT AUTO_INCREMENT PRIMARY KEY,
+    disciplina_id INT NOT NULL,
+    professor_id INT NOT NULL,
+    periodo_id INT NOT NULL,
+    codigo_turma VARCHAR(20) NOT NULL, -- Ex: 'MAT-2025-A'
+    sala VARCHAR(20),
+    horario VARCHAR(50), -- Ex: 'Seg/Qua 08:00'
+    encerrada BOOLEAN DEFAULT FALSE,
+    
+    FOREIGN KEY (disciplina_id) REFERENCES Disciplinas(disciplina_id),
+    FOREIGN KEY (professor_id) REFERENCES Pessoas(pessoa_id),
+    FOREIGN KEY (periodo_id) REFERENCES PeriodosLetivos(periodo_id),
+    
+    UNIQUE KEY uk_turma (disciplina_id, periodo_id, codigo_turma)
+);
+
+-- 4. Matrícula (O vínculo do aluno com a turma)
+CREATE TABLE Matriculas (
+    matricula_id INT AUTO_INCREMENT PRIMARY KEY,
+    turma_id INT NOT NULL,
+    aluno_id INT NOT NULL,
+    media_final DECIMAL(5, 2) DEFAULT NULL,
+    frequencia_percentual DECIMAL(5, 2) DEFAULT 100.00,
+    status ENUM('Cursando', 'Aprovado', 'Reprovado', 'Recuperacao', 'Trancado') DEFAULT 'Cursando',
+    
+    FOREIGN KEY (turma_id) REFERENCES Turmas(turma_id),
+    FOREIGN KEY (aluno_id) REFERENCES Pessoas(pessoa_id),
+    UNIQUE KEY uk_matricula (turma_id, aluno_id) -- Aluno não pode estar 2x na mesma turma
+);
+
+-- 5. Definição de Avaliações (A regra do jogo)
+CREATE TABLE AvaliacoesConfig (
+    avaliacao_id INT AUTO_INCREMENT PRIMARY KEY,
+    turma_id INT NOT NULL,
+    nome VARCHAR(50) NOT NULL, -- P1, P2, Trabalho Final
+    peso DECIMAL(5, 2) NOT NULL DEFAULT 1.0, -- Peso para média ponderada
+    data_prevista DATE,
+    
+    FOREIGN KEY (turma_id) REFERENCES Turmas(turma_id) ON DELETE CASCADE
+);
+
+-- 6. Notas Lançadas (O resultado)
 CREATE TABLE Notas (
     nota_id INT AUTO_INCREMENT PRIMARY KEY,
-    aluno_id INT NOT NULL,
-    disciplina_id INT NOT NULL,
-    nota DECIMAL(5, 2) NOT NULL CHECK (nota >= 0 AND nota <= 10),
-    data_avaliacao DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (aluno_id) REFERENCES Alunos(aluno_id) ON DELETE CASCADE,
-    FOREIGN KEY (disciplina_id) REFERENCES Disciplinas(disciplina_id) ON DELETE CASCADE
+    matricula_id INT NOT NULL,
+    avaliacao_id INT NOT NULL,
+    valor DECIMAL(5, 2) NOT NULL CHECK (valor >= 0 AND valor <= 10),
+    data_lancamento DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (matricula_id) REFERENCES Matriculas(matricula_id) ON DELETE CASCADE,
+    FOREIGN KEY (avaliacao_id) REFERENCES AvaliacoesConfig(avaliacao_id) ON DELETE CASCADE,
+    UNIQUE KEY uk_nota_unica (matricula_id, avaliacao_id)
 );
 
--- Tabela para armazenar presença dos alunos
-CREATE TABLE Presencas (
-    presenca_id INT AUTO_INCREMENT PRIMARY KEY,
-    aluno_id INT NOT NULL,
-    disciplina_id INT NOT NULL,
-    data_presenca DATE NOT NULL,
-    status ENUM('Presente', 'Faltou') NOT NULL,
-    FOREIGN KEY (aluno_id) REFERENCES Alunos(aluno_id) ON DELETE CASCADE,
-    FOREIGN KEY (disciplina_id) REFERENCES Disciplinas(disciplina_id) ON DELETE CASCADE,
-    UNIQUE (aluno_id, disciplina_id, data_presenca)
+-- 7. Controle de Frequência Diária
+CREATE TABLE FrequenciaDiaria (
+    frequencia_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    matricula_id INT NOT NULL,
+    data_aula DATE NOT NULL,
+    presente BOOLEAN NOT NULL DEFAULT FALSE,
+    
+    FOREIGN KEY (matricula_id) REFERENCES Matriculas(matricula_id) ON DELETE CASCADE,
+    INDEX idx_freq_data (data_aula)
 );
 
--- Índices para melhorar a performance
-CREATE INDEX idx_aluno_nome ON Alunos(nome);
-CREATE INDEX idx_professor_nome ON Professores(nome);
-CREATE INDEX idx_disciplina_nome ON Disciplinas(nome);
-CREATE INDEX idx_nota_aluno ON Notas(aluno_id);
-CREATE INDEX idx_presenca_aluno ON Presencas(aluno_id);
+-- =========================================================
+-- 🧠 INTELIGÊNCIA ACADÊMICA (PROCS & TRIGGERS)
+-- =========================================================
 
--- View para listar alunos com suas notas e presenças
-CREATE VIEW ViewAlunosNotasPresencas AS
-SELECT a.aluno_id, a.nome AS aluno, d.nome AS disciplina, n.nota, p.status, p.data_presenca
-FROM Alunos a
-LEFT JOIN Notas n ON a.aluno_id = n.aluno_id
-LEFT JOIN Presencas p ON a.aluno_id = p.aluno_id
-LEFT JOIN Disciplinas d ON n.disciplina_id = d.disciplina_id OR p.disciplina_id = d.disciplina_id
-ORDER BY a.nome, d.nome;
+-- VIEW: Boletim Escolar Detalhado
+CREATE OR REPLACE VIEW v_BoletimEscolar AS
+SELECT 
+    pl.nome AS periodo,
+    p.nome AS aluno,
+    d.nome AS disciplina,
+    t.codigo_turma,
+    -- Subquery para concatenar notas (Ex: P1: 8.0 | P2: 7.0)
+    (SELECT GROUP_CONCAT(CONCAT(ac.nome, ': ', n.valor) SEPARATOR ' | ')
+     FROM Notas n 
+     JOIN AvaliacoesConfig ac ON n.avaliacao_id = ac.avaliacao_id 
+     WHERE n.matricula_id = m.matricula_id) AS notas_detalhadas,
+    m.media_final,
+    m.frequencia_percentual,
+    m.status
+FROM Matriculas m
+JOIN Turmas t ON m.turma_id = t.turma_id
+JOIN Disciplinas d ON t.disciplina_id = d.disciplina_id
+JOIN PeriodosLetivos pl ON t.periodo_id = pl.periodo_id
+JOIN Pessoas p ON m.aluno_id = p.pessoa_id;
 
--- Função para calcular a média de notas de um aluno em uma disciplina
+-- PROCEDURE: Calcular Média e Atualizar Status (O Cérebro)
 DELIMITER //
-CREATE FUNCTION MediaNotas(alunoId INT, disciplinaId INT) RETURNS DECIMAL(5, 2)
+CREATE PROCEDURE sp_RecalcularMedia(IN p_matricula_id INT)
 BEGIN
-    DECLARE media DECIMAL(5, 2);
-    SELECT AVG(nota) INTO media 
-    FROM Notas 
-    WHERE aluno_id = alunoId AND disciplina_id = disciplinaId;
-    RETURN IFNULL(media, 0);
+    DECLARE v_soma_notas DECIMAL(10,2);
+    DECLARE v_soma_pesos DECIMAL(10,2);
+    DECLARE v_media DECIMAL(5,2);
+    
+    -- 1. Cálculo de Média Ponderada
+    SELECT 
+        SUM(n.valor * ac.peso), 
+        SUM(ac.peso)
+    INTO v_soma_notas, v_soma_pesos
+    FROM Notas n
+    JOIN AvaliacoesConfig ac ON n.avaliacao_id = ac.avaliacao_id
+    WHERE n.matricula_id = p_matricula_id;
+
+    -- Evitar divisão por zero
+    IF v_soma_pesos > 0 THEN
+        SET v_media = v_soma_notas / v_soma_pesos;
+    ELSE
+        SET v_media = 0;
+    END IF;
+
+    -- 2. Atualizar Tabela Matrícula
+    UPDATE Matriculas 
+    SET media_final = v_media,
+        status = CASE 
+            WHEN v_media >= 7.0 THEN 'Aprovado'
+            WHEN v_media < 4.0 THEN 'Reprovado'
+            ELSE 'Recuperacao'
+        END
+    WHERE matricula_id = p_matricula_id;
+    
 END //
 DELIMITER ;
 
--- Trigger para garantir que um aluno não tenha notas duplicadas em uma disciplina
+-- TRIGGER: Dispara o Recálculo sempre que uma nota muda
 DELIMITER //
-CREATE TRIGGER Trigger_AntesInserirNota
-BEFORE INSERT ON Notas
+CREATE TRIGGER trg_AposInserirNota
+AFTER INSERT ON Notas
 FOR EACH ROW
 BEGIN
-    IF (SELECT COUNT(*) FROM Notas WHERE aluno_id = NEW.aluno_id AND disciplina_id = NEW.disciplina_id) > 0 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Nota já existe para este aluno na disciplina.';
-    END IF;
+    CALL sp_RecalcularMedia(NEW.matricula_id);
+END //
+
+CREATE TRIGGER trg_AposAtualizarNota
+AFTER UPDATE ON Notas
+FOR EACH ROW
+BEGIN
+    CALL sp_RecalcularMedia(NEW.matricula_id);
+END //
+
+-- Trigger para Controle de Frequência (Atualiza % na Matrícula)
+CREATE TRIGGER trg_AtualizarFrequencia
+AFTER INSERT ON FrequenciaDiaria
+FOR EACH ROW
+BEGIN
+    DECLARE v_total_aulas INT;
+    DECLARE v_presencas INT;
+    
+    -- Conta total de registros para essa matrícula
+    SELECT COUNT(*), SUM(CASE WHEN presente = 1 THEN 1 ELSE 0 END)
+    INTO v_total_aulas, v_presencas
+    FROM FrequenciaDiaria
+    WHERE matricula_id = NEW.matricula_id;
+    
+    UPDATE Matriculas 
+    SET frequencia_percentual = (v_presencas / v_total_aulas) * 100
+    WHERE matricula_id = NEW.matricula_id;
 END //
 DELIMITER ;
-
--- Inserção de exemplo de alunos
-INSERT INTO Alunos (nome, data_nascimento, email) VALUES 
-('João Silva', '2000-05-15', 'joao.silva@example.com'),
-('Maria Oliveira', '1998-08-22', 'maria.oliveira@example.com'),
-('Pedro Santos', '1999-02-10', 'pedro.santos@example.com');
-
--- Inserção de exemplo de professores
-INSERT INTO Professores (nome, email, especialidade) VALUES 
-('Dr. Carlos Lima', 'carlos.lima@example.com', 'Matemática'),
-('Prof. Ana Costa', 'ana.costa@example.com', 'História'),
-('Profa. Rita Almeida', 'rita.almeida@example.com', 'Biologia');
-
--- Inserção de exemplo de disciplinas
-INSERT INTO Disciplinas (nome, carga_horaria, professor_id) VALUES 
-('Matemática', 60, 1),
-('História', 40, 2),
-('Biologia', 50, 3);
-
--- Inserção de exemplo de notas
-INSERT INTO Notas (aluno_id, disciplina_id, nota) VALUES 
-(1, 1, 8.5),
-(1, 2, 9.0),
-(2, 1, 7.5),
-(2, 3, 8.0),
-(3, 2, 6.5);
-
--- Inserção de exemplo de presenças
-INSERT INTO Presencas (aluno_id, disciplina_id, data_presenca, status) VALUES 
-(1, 1, '2024-10-01', 'Presente'),
-(1, 2, '2024-10-02', 'Faltou'),
-(2, 1, '2024-10-01', 'Presente'),
-(3, 3, '2024-10-02', 'Presente');
-
--- Selecionar todos os alunos com suas notas e presenças
-SELECT * FROM ViewAlunosNotasPresencas;
-
--- Obter a média de notas de um aluno em uma disciplina específica
-SELECT MediaNotas(1, 1) AS media_aluno_1_disciplina_1;
-
--- Excluir uma nota
-DELETE FROM Notas WHERE nota_id = 1;
-
--- Excluir um aluno (isso falhará se o aluno tiver notas ou presenças)
-DELETE FROM Alunos WHERE aluno_id = 1;
-
--- Excluir uma disciplina (isso falhará se a disciplina tiver notas ou presenças)
-DELETE FROM Disciplinas WHERE disciplina_id = 1;
